@@ -77,9 +77,13 @@ noise; the PAT reads/writes the variable directly.
 ## Local testing
 
 ```bash
-GH_TOKEN="$(gh auth token)" WATCH_DRY_RUN=1 WATCH_STATE_FILE=/tmp/s.json \
-  WATCH_LOOKBACK_MIN=129600 python3 watch.py     # 90-day dry run, prints, sends nothing
+GH_TOKEN="$(gh auth token)" WATCH_DRY_RUN=1 WATCH_VERBOSE=1 WATCH_STATE_FILE=/tmp/s.json \
+  WATCH_LOOKBACK_MIN=129600 python3 watch.py     # 90-day dry run, prints detail, sends nothing
 ```
+
+`WATCH_VERBOSE=1` prints per-item repo/actor/URL detail. It's **off by default** so the
+Actions log (world-readable if this repo is public) never exposes private-repo activity —
+only counts. Leave it off in CI; the details go in the email.
 
 ## Known limitations
 

@@ -79,6 +79,10 @@ MAX_WORKERS    = int(_env("WATCH_MAX_WORKERS", "8"))
 INCLUDE_ARCH   = _truthy(_env("WATCH_INCLUDE_ARCHIVED", ""))
 DRY_RUN        = _truthy(_env("WATCH_DRY_RUN", ""))
 LOOKBACK_MIN   = _env("WATCH_LOOKBACK_MIN")
+# Print per-item repo/actor/URL detail to stdout. OFF by default so this is safe to run in
+# a PUBLIC repo (Actions logs are world-readable) — details only ever go in the email.
+# Turn on for local debugging where the terminal is private.
+VERBOSE        = _truthy(_env("WATCH_VERBOSE", ""))
 
 # Event types that count as "a person interacted".
 HUMAN_TYPES = {
@@ -408,8 +412,9 @@ def main():
     items = [describe(e) for e in fresh]
 
     print(f"found {len(all_events)} in-window events, {len(items)} new outside interactions")
-    for it in items:
-        print(f"  · {it['when']}  {it['actor']:20}  {it['verb']:24}  {it['repo']}  {it['url']}")
+    if VERBOSE:  # detail is sensitive (private-repo names/actors) — opt-in only
+        for it in items:
+            print(f"  · {it['when']}  {it['actor']:20}  {it['verb']:24}  {it['repo']}  {it['url']}")
 
     if items and not DRY_RUN:
         if not RESEND_KEY or not ALERT_TO:
