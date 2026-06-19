@@ -1,0 +1,52 @@
+name: org-watch
+
+# Alert (via email) when anyone other than the owner interacts with an imazen/* repo.
+# Runs on a schedule; the steady-state 60-minute lookback window absorbs the fact that
+# GitHub cron is best-effort and can be delayed or skipped under load.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes (best-effort; the 60-min window covers jitter)
+  workflow_dispatch:
+    inputs:
+      lookback_min:
+        description: "Override lookback window in minutes (blank = normal)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Print what would be sent, do not email or write state"
+        type: boolean
+        required: false
+        default: false
+
+# Never let two runs overlap and clobber the shared state variable.
+concurrency:
+  group: org-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sweep org for outside activity
+        env:
+          # Data + state access: classic PAT with `repo` + `read:org`.
+          GH_TOKEN: ${{ secrets.ORG_READ_TOKEN }}
+          # Email delivery:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_TO: ${{ vars.ALERT_TO }}
+          ALERT_FROM: ${{ vars.ALERT_FROM }}
+          # Optional overrides (sane defaults baked into watch.py):
+          WATCH_ORG: ${{ vars.WATCH_ORG }}
+          WATCH_SELF_LOGINS: ${{ vars.WATCH_SELF_LOGINS }}
+          WATCH_BOT_DENYLIST: ${{ vars.WATCH_BOT_DENYLIST }}
+          # Manual-dispatch knobs (empty on schedule):
+          WATCH_LOOKBACK_MIN: ${{ github.event.inputs.lookback_min }}
+          WATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: python3 watch.py
