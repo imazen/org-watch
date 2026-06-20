@@ -17,7 +17,7 @@ GitHub Events feed of **every non-archived repo in the org** (public *and* priva
 - `PullRequestEvent`, `PullRequestReviewEvent`, `PullRequestReviewCommentEvent` — PR opened/merged/reviewed
 - `CommitCommentEvent`, discussion events
 
-...where the actor is **not** you and **not** a bot, then emails the new ones via Resend.
+...where the actor is **not** you and **not** a bot, then emails the new ones via SMTP.
 
 Why per-repo events instead of `GET /orgs/{org}/events`: the org feed is **public-only**
 and silently misses all private repos. The authenticated per-repo feed covers both and
@@ -30,17 +30,23 @@ ones that actually show up here — `Copilot`, `codecov-commenter`, `dependabot`
 
 ## Setup (3 steps)
 
-**1. Create a classic GitHub PAT** — scopes `repo` + `read:org` (it needs to read private
-repo events and read/write one Actions variable). https://github.com/settings/tokens
+**1. Create a GitHub token** that can read every repo's events (incl. private) and
+read/write one Actions variable:
+- **Classic (easiest):** https://github.com/settings/tokens/new → check **`repo`** + **`read:org`**.
+  (If you're on the *fine-grained* page you won't see these checkboxes — that's the wrong page.)
+- **Fine-grained (alt):** https://github.com/settings/personal-access-tokens/new → owner `imazen`,
+  All repositories; Repository permissions: Metadata=Read, Contents=Read, Issues=Read,
+  Pull requests=Read, **Variables=Read and write**.
 
-**2. Get a Resend API key** — https://resend.com → API Keys. The default
-`ALERT_FROM=onboarding@resend.dev` delivers only to the email you signed up with, which is
-fine for sending to yourself. To use a custom from-address, verify a domain in Resend.
+**2. Get SMTP credentials** for an email account you already have (no third-party service).
+For Gmail/Workspace: enable 2-Step Verification, then create an **app password** at
+https://myaccount.google.com/apppasswords and use `smtp.gmail.com:587`. Any provider works —
+just use its SMTP host + an app password.
 
 **3. Wire it up:**
 
 ```bash
-cp .env.example .env      # fill in ORG_READ_TOKEN, RESEND_API_KEY, ALERT_TO, ALERT_FROM
+cp .env.example .env      # fill in ORG_READ_TOKEN, SMTP_*, ALERT_TO, ALERT_FROM
 ./setup.sh                # pushes them as repo secrets/variables (needs gh admin auth)
 ```
 
@@ -54,8 +60,8 @@ The schedule takes over automatically after that.
 
 ## Configuration
 
-Secrets (`gh secret set`): `ORG_READ_TOKEN`, `RESEND_API_KEY`.
-Variables (`gh variable set`): `ALERT_TO`, `ALERT_FROM`, and optionally:
+Secrets (`gh secret set`): `ORG_READ_TOKEN`, `SMTP_PASS`.
+Variables (`gh variable set`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `ALERT_TO`, `ALERT_FROM`, and optionally:
 
 | variable / env          | default            | meaning                                      |
 |-------------------------|--------------------|----------------------------------------------|

@@ -7,7 +7,7 @@ How it works
 Every run it sweeps the GitHub *Events* feed of every (non-archived) repo in the
 org in parallel, keeps only human-collaboration events (issues, PRs, comments,
 reviews) whose actor is neither the owner nor a bot, drops anything already seen,
-and emails the new activity via Resend.
+and emails the new activity via SMTP (or Resend).
 
 Why per-repo events instead of the org feed: `GET /orgs/{org}/events` only
 returns *public* events, so it silently misses every private repo. The
@@ -18,10 +18,12 @@ owner's own push noise.
 Stdlib only — nothing to `pip install` on the runner.
 
 Env (all optional unless noted):
-  GH_TOKEN / GITHUB_TOKEN  GitHub PAT with org read (repo + read:org)   [required]
-  RESEND_API_KEY           Resend API key                               [required unless dry-run]
+  GH_TOKEN / GITHUB_TOKEN  GitHub token with org read (repo + read:org) [required]
   ALERT_TO                 comma-sep recipients                         [required unless dry-run]
-  ALERT_FROM               from address (default onboarding@resend.dev)
+  ALERT_FROM               from address (defaults to SMTP_USER)
+  -- pick ONE sender --
+  SMTP_HOST/PORT/USER/PASS SMTP server + app password (587 STARTTLS / 465 SSL)  [preferred]
+  RESEND_API_KEY           Resend API key                               (alternative sender)
   WATCH_ORG                org to watch (default: imazen)
   WATCH_SELF_LOGINS        comma-sep logins treated as "the owner"      (default: lilith)
   WATCH_BOT_DENYLIST       comma-sep extra bot logins to ignore
@@ -40,12 +42,15 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import os
+import smtplib
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 
 GITHUB_API = "https://api.github.com"
 RESEND_API = "https://api.resend.com/emails"
@@ -66,9 +71,15 @@ _DEFAULT_BOTS  = "copilot,codecov-commenter,github-actions,renovate,mergify,pre-
 BOT_DENYLIST   = {x.strip().lower() for x in (_DEFAULT_BOTS + "," + _env("WATCH_BOT_DENYLIST", "")).split(",") if x.strip()}
 
 GH_TOKEN       = _env("GH_TOKEN") or _env("GITHUB_TOKEN")
+# Delivery: SMTP (stdlib, no third-party service) is used if SMTP_HOST is set;
+# otherwise Resend if RESEND_API_KEY is set.
+SMTP_HOST      = _env("SMTP_HOST")
+SMTP_PORT      = int(_env("SMTP_PORT", "587"))     # 587 STARTTLS (default) or 465 SSL
+SMTP_USER      = _env("SMTP_USER")
+SMTP_PASS      = _env("SMTP_PASS")
 RESEND_KEY     = _env("RESEND_API_KEY")
 ALERT_TO       = [x.strip() for x in _env("ALERT_TO", "").split(",") if x.strip()]
-ALERT_FROM     = _env("ALERT_FROM", "imazen org-watch <onboarding@resend.dev>")
+ALERT_FROM     = _env("ALERT_FROM")                # defaulted per-sender below
 
 STATE_REPO     = _env("WATCH_STATE_REPO", f"{ORG}/org-watch")
 STATE_FILE     = _env("WATCH_STATE_FILE")
@@ -362,9 +373,32 @@ def subject(items):
     who = ", ".join(actors[:3]) + (f" +{len(actors) - 3} more" if len(actors) > 3 else "")
     return f"[imazen-watch] {len(items)} outside interactions ({who})"
 
-def send_email(items):
+def send_email_smtp(items):
+    msg = EmailMessage()
+    msg["Subject"] = subject(items)
+    msg["From"] = ALERT_FROM or SMTP_USER
+    msg["To"] = ", ".join(ALERT_TO)
+    msg.set_content(render_text(items))
+    msg.add_alternative(render_html(items), subtype="html")
+    ctx = ssl.create_default_context()
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx, timeout=30) as s:
+            if SMTP_USER:
+                s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            if SMTP_USER:
+                s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    print(f"smtp: sent to {len(ALERT_TO)} recipient(s) via {SMTP_HOST}:{SMTP_PORT}")
+
+
+def send_email_resend(items):
     body = {
-        "from": ALERT_FROM,
+        "from": ALERT_FROM or "imazen org-watch <onboarding@resend.dev>",
         "to": ALERT_TO,
         "subject": subject(items),
         "html": render_html(items),
@@ -372,6 +406,15 @@ def send_email(items):
     }
     status, _, payload = gh("POST", RESEND_API, RESEND_KEY, body=body, accept="application/json")
     print(f"resend: status={status} id={(payload or {}).get('id')}")
+
+
+def deliver(items):
+    if SMTP_HOST:
+        send_email_smtp(items)
+    elif RESEND_KEY:
+        send_email_resend(items)
+    else:
+        sys.exit("ERROR: no email sender configured (set SMTP_* or RESEND_API_KEY)")
 
 # ---------------------------------------------------------------- main
 
@@ -417,10 +460,9 @@ def main():
             print(f"  · {it['when']}  {it['actor']:20}  {it['verb']:24}  {it['repo']}  {it['url']}")
 
     if items and not DRY_RUN:
-        if not RESEND_KEY or not ALERT_TO:
-            sys.exit("ERROR: RESEND_API_KEY and ALERT_TO required to send (or set WATCH_DRY_RUN=1)")
-        # Cap absurd backlogs so one email can't balloon.
-        send_email(items[:80])
+        if not ALERT_TO or not (SMTP_HOST or RESEND_KEY):
+            sys.exit("ERROR: set ALERT_TO and either SMTP_* or RESEND_API_KEY to send (or WATCH_DRY_RUN=1)")
+        deliver(items[:80])  # cap absurd backlogs so one email can't balloon
 
     # Record everything we just alerted on, prune old ids.
     for e in fresh:
