@@ -1,6 +1,6 @@
 # imazen org-watch
 
-Emails you when **anyone other than you** interacts with a repo in the `imazen` org —
+Notifies you when **anyone other than you** interacts with a repo in the `imazen` org —
 issues, PRs, comments, and reviews — so third-party activity stands out from your own
 flood of GitHub notifications.
 
@@ -17,7 +17,9 @@ GitHub Events feed of **every non-archived repo in the org** (public *and* priva
 - `PullRequestEvent`, `PullRequestReviewEvent`, `PullRequestReviewCommentEvent` — PR opened/merged/reviewed
 - `CommitCommentEvent`, discussion events
 
-...where the actor is **not** you and **not** a bot, then emails the new ones via SMTP.
+...where the actor is **not** you and **not** a bot, then sends the new ones to your notifier
+(Telegram / ntfy / Pushover / Discord / Slack / … via [Apprise](https://github.com/caronc/apprise),
+or SMTP email as a fallback).
 
 Why per-repo events instead of `GET /orgs/{org}/events`: the org feed is **public-only**
 and silently misses all private repos. The authenticated per-repo feed covers both and
@@ -38,15 +40,19 @@ read/write one Actions variable:
   All repositories; Repository permissions: Metadata=Read, Contents=Read, Issues=Read,
   Pull requests=Read, **Variables=Read and write**.
 
-**2. Get SMTP credentials** for an email account you already have (no third-party service).
-For Gmail/Workspace: enable 2-Step Verification, then create an **app password** at
-https://myaccount.google.com/apppasswords and use `smtp.gmail.com:587`. Any provider works —
-just use its SMTP host + an app password.
+**2. Pick a notifier** and get its [Apprise](https://github.com/caronc/apprise/wiki) URL — no
+email account needed. Telegram is a good default (free + private):
+- **Telegram:** DM `@BotFather` → `/newbot` → copy the bot token; get your numeric chat id
+  (DM the bot once, then open `https://api.telegram.org/bot<token>/getUpdates`); URL = `tgram://<token>/<chatid>`
+- **Pushover / Discord / Slack / ntfy / 100+ others:** see the Apprise wiki for the URL format.
+  Prefer a private service — alerts include private-repo names.
+
+(SMTP email still works as a fallback — fill the commented block in `.env.example` instead.)
 
 **3. Wire it up:**
 
 ```bash
-cp .env.example .env      # fill in ORG_READ_TOKEN, SMTP_*, ALERT_TO, ALERT_FROM
+cp .env.example .env      # fill in ORG_READ_TOKEN + APPRISE_URL
 ./setup.sh                # pushes them as repo secrets/variables (needs gh admin auth)
 ```
 
@@ -60,8 +66,8 @@ The schedule takes over automatically after that.
 
 ## Configuration
 
-Secrets (`gh secret set`): `ORG_READ_TOKEN`, `SMTP_PASS`.
-Variables (`gh variable set`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `ALERT_TO`, `ALERT_FROM`, and optionally:
+Secrets (`gh secret set`): `ORG_READ_TOKEN`, plus either `APPRISE_URL` (notifier) **or** `SMTP_PASS` (email).
+Variables (`gh variable set`): for the SMTP fallback only — `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`ALERT_TO`/`ALERT_FROM`. Optionally:
 
 | variable / env          | default            | meaning                                      |
 |-------------------------|--------------------|----------------------------------------------|

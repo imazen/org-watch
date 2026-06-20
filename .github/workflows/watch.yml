@@ -34,11 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install notifier deps (Apprise)
+        run: pip install --quiet apprise
+
       - name: Sweep org for outside activity
         env:
           # Data + state access: PAT with repo + read:org (classic) or equivalent fine-grained.
           GH_TOKEN: ${{ secrets.ORG_READ_TOKEN }}
-          # Email delivery via SMTP:
+          # Notifier (preferred): a single Apprise URL — Telegram/ntfy/Pushover/Discord/Slack/…
+          APPRISE_URL: ${{ secrets.APPRISE_URL }}
+          # Email delivery via SMTP (used only if APPRISE_URL is unset):
           SMTP_HOST: ${{ vars.SMTP_HOST }}
           SMTP_PORT: ${{ vars.SMTP_PORT }}
           SMTP_USER: ${{ vars.SMTP_USER }}

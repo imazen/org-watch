@@ -21,9 +21,10 @@ Env (all optional unless noted):
   GH_TOKEN / GITHUB_TOKEN  GitHub token with org read (repo + read:org) [required]
   ALERT_TO                 comma-sep recipients                         [required unless dry-run]
   ALERT_FROM               from address (defaults to SMTP_USER)
-  -- pick ONE sender --
-  SMTP_HOST/PORT/USER/PASS SMTP server + app password (587 STARTTLS / 465 SSL)  [preferred]
-  RESEND_API_KEY           Resend API key                               (alternative sender)
+  -- pick ONE sender (checked in this order) --
+  APPRISE_URL              notifier URL(s): Telegram/ntfy/Pushover/Discord/Slack via Apprise  [preferred]
+  SMTP_HOST/PORT/USER/PASS SMTP server + app password (587 STARTTLS / 465 SSL)
+  RESEND_API_KEY           Resend API key
   WATCH_ORG                org to watch (default: imazen)
   WATCH_SELF_LOGINS        comma-sep logins treated as "the owner"      (default: lilith)
   WATCH_BOT_DENYLIST       comma-sep extra bot logins to ignore
@@ -71,8 +72,11 @@ _DEFAULT_BOTS  = "copilot,codecov-commenter,github-actions,renovate,mergify,pre-
 BOT_DENYLIST   = {x.strip().lower() for x in (_DEFAULT_BOTS + "," + _env("WATCH_BOT_DENYLIST", "")).split(",") if x.strip()}
 
 GH_TOKEN       = _env("GH_TOKEN") or _env("GITHUB_TOKEN")
-# Delivery: SMTP (stdlib, no third-party service) is used if SMTP_HOST is set;
-# otherwise Resend if RESEND_API_KEY is set.
+# Delivery, in priority order:
+#   1. APPRISE_URL    — notifier URL(s): Telegram, ntfy, Pushover, Discord/Slack, … (via Apprise)
+#   2. SMTP_*         — plain email over SMTP (stdlib)
+#   3. RESEND_API_KEY — Resend transactional email
+APPRISE_URL    = _env("APPRISE_URL")
 SMTP_HOST      = _env("SMTP_HOST")
 SMTP_PORT      = int(_env("SMTP_PORT", "587"))     # 587 STARTTLS (default) or 465 SSL
 SMTP_USER      = _env("SMTP_USER")
@@ -408,13 +412,30 @@ def send_email_resend(items):
     print(f"resend: status={status} id={(payload or {}).get('id')}")
 
 
+def send_notify_apprise(items):
+    import apprise  # installed via `pip install apprise` in the workflow; imported lazily
+    ap = apprise.Apprise()
+    added = 0
+    for url in APPRISE_URL.split():  # whitespace / newlines separate multiple targets
+        if ap.add(url):
+            added += 1
+    if not added:
+        sys.exit("ERROR: APPRISE_URL had no valid notifier targets")
+    ok = ap.notify(title=subject(items), body=render_text(items))
+    print(f"apprise: notify ok={ok} via {added} target(s)")
+    if not ok:
+        sys.exit("ERROR: apprise notify failed (check APPRISE_URL / service)")
+
+
 def deliver(items):
-    if SMTP_HOST:
+    if APPRISE_URL:
+        send_notify_apprise(items)
+    elif SMTP_HOST:
         send_email_smtp(items)
     elif RESEND_KEY:
         send_email_resend(items)
     else:
-        sys.exit("ERROR: no email sender configured (set SMTP_* or RESEND_API_KEY)")
+        sys.exit("ERROR: no sender configured (set APPRISE_URL, SMTP_*, or RESEND_API_KEY)")
 
 # ---------------------------------------------------------------- main
 
@@ -460,9 +481,11 @@ def main():
             print(f"  · {it['when']}  {it['actor']:20}  {it['verb']:24}  {it['repo']}  {it['url']}")
 
     if items and not DRY_RUN:
-        if not ALERT_TO or not (SMTP_HOST or RESEND_KEY):
-            sys.exit("ERROR: set ALERT_TO and either SMTP_* or RESEND_API_KEY to send (or WATCH_DRY_RUN=1)")
-        deliver(items[:80])  # cap absurd backlogs so one email can't balloon
+        has_sender = APPRISE_URL or (ALERT_TO and (SMTP_HOST or RESEND_KEY))
+        if not has_sender:
+            sys.exit("ERROR: configure a sender — APPRISE_URL, or SMTP_*/RESEND_API_KEY + ALERT_TO "
+                     "(or set WATCH_DRY_RUN=1)")
+        deliver(items[:80])  # cap absurd backlogs so one notification can't balloon
 
     # Record everything we just alerted on, prune old ids.
     for e in fresh:
